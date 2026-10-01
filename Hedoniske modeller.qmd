@@ -1,0 +1,182 @@
+---
+title: "Hedoniske modeller"
+format: html
+editor: visual
+---
+
+```{r}
+library(Jmisc)
+library(sf)
+library(tidyverse)
+library(ggplot2)
+library(sp)
+library(spdep)
+library(spatialreg)
+library(spData)
+library(modelsummary)
+library(flextable)
+library(knitr)
+library(sandwich)
+library(viridis)
+library(viridisLite)
+# Options
+options(scipen = 999)
+options(paged.print = FALSE)
+```
+
+```{r}
+spData::house |>
+  spplot(
+  # select variable "price" from
+  # SpatialPointsDataFrame object
+    zcol = c("price"),
+    cex = 0.2, 
+    pch = 20,
+    # use continuous, 
+    # levelplot-like colorkey
+    colorkey = TRUE
+    )
+```
+
+```{r}
+dim(spData::house)
+```
+
+```{r}
+house <- get(data(house))
+house$logPrice = log(house$price + 1)
+
+house |>
+  spplot(
+  # select variable "price" from
+  # SpatialPointsDataFrame object
+    zcol = c("logPrice"),
+    cex = 0.1, 
+    pch = 20,
+    # use continuous, 
+    # levelplot-like colorkey
+    colorkey = TRUE
+    )
+```
+
+```{r}
+dim(spData::house)
+```
+
+```{r}
+spData::house |> 
+  st_crs()
+```
+
+```{r}
+# lucas as sf version of spData::house
+lucas <- spData::house |> 
+  st_as_sf()
+```
+
+```{r}
+# Check projection for lucas
+lucas |> 
+  st_crs()
+```
+
+```{r}
+lucas <- lucas |> 
+  st_transform('epsg:2834')
+```
+
+```{r}
+#Check new projection for lucas
+lucas |> 
+  st_crs()
+```
+
+```{r}
+lucas |> 
+  select(price) |> 
+  plot(
+    cex = 0.05, 
+    pch = 20,
+    axes = TRUE
+    )
+```
+
+```{r}
+lucas |> 
+  ggplot() +
+  geom_sf() +
+  coord_sf(datum = NULL)
+```
+
+```{r}
+lucas |> 
+  ggplot() +
+  geom_histogram(
+    mapping = aes(x = age)
+  )
+```
+
+```{r}
+lucas <- lucas |> 
+  mutate(age_sold = as.integer(as.character(syear)) - yrbuilt)
+```
+
+```{r}
+lucas |> 
+  ggplot() +
+  geom_histogram(
+    mapping = aes(x = age_sold)
+  )
+```
+
+```{r}
+# Houses sold before finished
+lucas |> 
+  reframe(table(age_sold < 0))
+```
+
+```{r}
+# define the model
+# hmod1 <- "log(price) ~ age_sold + I(age_sold^2) + 
+# I(age_sold^3) + log(TLA) + log(lotsize) + rooms + beds + syear"
+hmod1 <- "price ~ age_sold + TLA + lotsize + rooms + beds + syear"
+```
+
+```{r}
+# put result in lm1
+lm1 <- lm(hmod1, data = lucas)
+```
+
+```{r}
+# 
+modelsummary(list(`Pooled Cross Section Model` = lm1), 
+             output = "gt",
+             escape = FALSE,
+  shape = term ~ model + statistic,
+  estimate = "estimate",
+  statistic = c("std.error", "statistic", "p.value"),
+  stars = TRUE,
+  gof_map = c("nobs", "r.squared", "adj.r.squared", "F"))
+# The whole Lucas dataset in lucas_full
+lucas_full <- lucas
+#
+# Save lucas_full to an RData file
+save(
+  lucas_full, 
+  file = "lucas_full.RData"
+  )
+```
+
+```{r}
+lucas_census.shp <- st_read(
+  dsn = "kx-lucas-county-ohio-census-tracts-SHP",
+  layer = "lucas-county-ohio-census-tracts"
+) |> 
+  st_transform(2834) |> 
+  mutate(
+    tract_name = fct(as.character(NAME10)) 
+  ) |> 
+  # tiny isolated island
+  filter(!(NAME10 == "9900"))
+```
+

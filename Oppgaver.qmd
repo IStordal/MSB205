@@ -1,0 +1,825 @@
+---
+title: "Oppgaver MSB205"
+format: html
+editor: visual
+---
+
+```{r}
+library(PxWebApiData)
+library(klassR)
+library(tidyverse)
+library(readxl)
+library(sf)
+library(sfdep)
+library(sp)
+library(spdep)
+library(spatialreg)
+library(broom)
+library(mctest)
+library(huxtable)
+library(tmap)
+library(gt)
+```
+
+```{r}
+load("knr23to25conversion.rdata")
+```
+
+```{r}
+tail(knr25conv, n = 5) |> 
+  gt()
+```
+
+```{r}
+pm2_2025 <- ApiData12(
+  urlToData = "14545",
+  Region = knr25conv$knr25,
+  Boligtype = "01",
+  Tid = "2025"
+  # ContentsCode = "KvPris"
+)
+```
+
+```{r}
+pm2_2025 <- pm2_2025 |>  
+  select(knr = Region, ContentsCode, value) |> 
+  pivot_wider(
+    id_cols = knr, 
+    names_from = "ContentsCode", 
+    values_from = "value"
+    ) |> 
+  rename(
+    pm2 = KvPris,
+    num_dwelling_sales = Omsetninger 
+  )
+```
+
+```{r}
+# 90 missing values. 
+# Try other years for these
+pm2_missing24 <- pm2_2025 |> 
+  filter(is.na(pm2)) |>  
+  select(knr)
+
+# Get data for the years 2024
+pm2_24 <- ApiData12(
+    urlToData = "06035",
+    Region = pm2_missing24$knr,
+    Boligtype = "01",
+    Tid = "2024")
+```
+
+```{r}
+tmp24 <- pm2_24 |> 
+  select(knr = Region, ContentsCode, Tid, value) |>  
+  pivot_wider(
+    id_cols = knr,
+    names_from = c("ContentsCode"),
+    values_from = "value"
+    ) |> 
+  select(knr, 
+         pm2h = KvPris, 
+         num_dwelling_salesh = Omsetninger)
+```
+
+```{r}
+pm2_2025 <- pm2_2025 |> 
+  left_join(
+    y = tmp24,
+    join_by(knr)
+  ) |> 
+  mutate(
+    pm2 = if_else(
+      is.na(pm2),
+      as.integer(pm2h),
+      pm2
+    ),
+    num_dwelling_sales =  if_else(
+      is.na(num_dwelling_sales),
+      as.integer(num_dwelling_salesh),
+      num_dwelling_sales
+    )
+  ) |> 
+  select(knr, pm2, num_dwelling_sales)
+```
+
+```{r}
+# Still 81 missing values
+pm2_missing23 <- pm2_2025 |> 
+  left_join(
+    y = knr25conv,
+    join_by(knr == knr25)
+  ) |> 
+  filter(is.na(pm2)) |>  
+  select(knr2023)
+
+# Get data for the years 2020-2023
+pm2_20to23 <- ApiData12(
+    urlToData = "06035",
+    Region = pm2_missing23$knr2023,
+    Boligtype = "01",
+    Tid = c(as.character(2020:2023)))
+```
+
+```{r}
+tmp23 <- pm2_20to23 |> 
+  select(knr2023 = Region, ContentsCode, Tid, value) |>  
+  pivot_wider(
+    id_cols = knr2023,
+    names_from = c("ContentsCode", "Tid"),
+    values_from = "value") %>% 
+  # calculate mean of existing values
+  mutate(
+    pm2h = rowMeans(
+      select(
+        .data = .,
+        KvPris_2020:KvPris_2023), 
+      na.rm = TRUE),
+    num_dwelling_salesh = rowMeans(
+      select(
+        .data = .,
+        Omsetninger_2020:Omsetninger_2023),
+      na.rm = TRUE)) |>
+  left_join(
+    y = knr25conv,
+    join_by(knr2023)) |> 
+  select(knr = knr25, pm2h, num_dwelling_salesh)
+```
+
+```{r}
+pm2_2025 <- pm2_2025 |> 
+  left_join(
+    y = tmp23,
+    join_by(knr)
+  ) |> 
+  mutate(
+    pm2 = if_else(
+      is.na(pm2),
+      as.integer(pm2h),
+      pm2
+    ),
+    num_dwelling_sales =  if_else(
+      is.na(num_dwelling_sales),
+      as.integer(num_dwelling_salesh),
+      num_dwelling_sales
+    )
+  ) |> 
+  select(knr, pm2, num_dwelling_sales)
+```
+
+```{r}
+summary(pm2_2025$pm2)
+```
+
+```{r}
+metadata_07459 <- ApiData(
+  urlToData = "07459",
+  # English
+  urlType = "SSBen", 
+  returnMetaFrames = TRUE
+  )
+```
+
+```{r}
+print(str(metadata_07459))
+```
+
+```{r}
+api_query <- ApiData(
+  urlToData = "07459",
+  returnApiQuery = TRUE
+  ) 
+```
+
+```{r}
+print(api_query)
+```
+
+```{r}
+# Kjonn = FALSE, aggregate F+M
+# The F in "F0-19" DOES NOT indicate Female
+pop_2026 <- ApiData12(
+    urlToData = "07459",
+    Region = knr25conv$knr25,
+    Alder = list(
+      "agg:TredeltGrupperingB2",
+      c("F0-19", "F20-64", "F65+")),
+    Kjonn = FALSE,
+    Tid = "2026"
+)
+```
+
+```{r}
+head(pop_2026, n = 4) |> 
+  gt()
+```
+```{r}
+pop_2026 <- pop_2026 |>  
+  select(knr = Region, 
+         Alder,
+         pop = value)
+```
+
+```{r}
+pop_2026 <- pop_2026 |>  
+  pivot_wider(id_cols = knr, 
+              names_from = "Alder", 
+              values_from = "pop") |> 
+  # Rename variables
+  rename(
+    pop_0_19 = `F0-19`,
+    pop_20_64 = `F20-64`,
+    pop_65p = `F65+`
+    ) |> 
+  # Calculate tot. pop.
+  mutate(tot_pop = pop_0_19 + pop_20_64 + pop_65p)
+```
+
+```{r}
+head(pop_2026, n = 5) |> 
+  gt()
+```
+
+```{r}
+dim(pop_2026)[1]
+```
+
+```{r}
+#Get metadata
+metadata_09429 <- ApiData(
+  urlToData = "09429",  
+  returnMetaFrames = TRUE
+  )
+str(metadata_09429)
+```
+
+```{r}
+#Get more info about table
+api_query_09429 <- ApiData(
+  urlToData = "09429",
+  returnApiQuery = TRUE)
+
+print(api_query_09429)
+```
+
+```{r}
+edu_2025 <- ApiData12(
+    urlToData = "09429",
+    # We want in percent
+    ContentsCode = "PersonerProsent",
+    Region = knr25conv$knr25,
+    # Drop "00" since total, 100%,.
+    # Also drop "09a" Uoppgit
+    Nivaa = c("01", "02a", 
+              "11", "03a", "04a"),
+    Kjonn = FALSE,
+    Tid = "2025"
+  ) |> 
+  select(
+    knr = Region,
+    nivaa = nivå,
+    edu_lev_percent = value
+  )
+```
+
+```{r}
+# Have a look at it
+head(edu_2025, n = 7) |> 
+  gt()
+```
+```{r}
+edu_2025 <- edu_2025 |>  
+   pivot_wider(
+     id_cols = knr, 
+     names_from = "nivaa", 
+     values_from = "edu_lev_percent"
+     ) |>  
+  rename(
+    edu_prim = `Grunnskolenivå`,
+    edu_sec = `Videregående skolenivå`,
+    edu_voc = `Fagskolenivå`,
+    edu_uni_short = `Universitets- og høgskolenivå, kort`,
+    edu_uni_long = `Universitets- og høgskolenivå, lang`
+  )
+```
+
+```{r}
+head(edu_2025, n = 7) |> 
+  gt()
+```
+```{r}
+dim(edu_2025)[1]
+```
+
+```{r}
+metadata_07183 <- ApiData(
+  urlToData = "07183",
+  returnMetaFrames = TRUE
+  )
+
+print(str(metadata_07183))
+```
+
+```{r}
+api_query_07183 <- ApiData(
+  urlToData = "07183",
+  returnApiQuery = TRUE)
+
+print(api_query_07183)
+```
+
+```{r}
+inc_2023 <- ApiData12(
+    urlToData = "07183",
+    # "Hushold" would also get us 
+    # total number of households 
+    # in the municipalities
+    ContentsCode = c(
+      paste(
+        "Inntekt", 
+        seq(
+          from = 1, 
+          to = 7), 
+        sep = ""
+        )
+      ),
+    Region = unique(knr25conv$knr2023),
+    Tid = "2023"
+  )
+```
+
+```{r}
+head(inc_2023, n = 9) |> 
+  gt()
+```
+
+```{r}
+inc_2023 <- inc_2023 |> 
+  select(
+    knr2023 = Region,
+    inc_cat = statistikkvariabel,
+    inc_lev_percent = value
+  ) |> 
+  left_join(
+    y = knr25conv,
+    join_by(knr2023),
+    # Deal with Ålesund and Haram
+    relationship = "many-to-many"
+  ) |> 
+  select(knr = knr25, 
+         everything()
+  )
+```
+
+```{r}
+inc_2023 |> 
+  filter(knr %in% c("1508", "1580")) |> 
+  head(n = 6) |> 
+  gt()
+```
+
+```{r}
+inc_2023 <- inc_2023 |> 
+  pivot_wider(
+     id_cols = knr, 
+     names_from = "inc_cat", 
+     values_from = "inc_lev_percent"
+     )
+# Split due to variable names.
+inc_2023 <- inc_2023 |>  
+  rename(
+    inc_0_150 = `Samlet inntekt under 150 000 kr, prosent`,
+    inc_150_250 = `Samlet inntekt 150 000 - 249 999 kr, prosent`,
+    inc_250_350 = `Samlet inntekt  250 000 - 349 999 kr, prosent`,
+    inc_350_450 = `Samlet inntekt  350 000 - 449 999 kr, prosent`,
+    inc_450_550 = `Samlet inntekt  450 000 - 549 999 kr, prosent`,
+    inc_550_750 = `Samlet inntekt  550 000 - 749 999 kr, prosent`,
+    inc_750k_p = `Samlet inntekt 750 000 kr og over, prosent`
+  )
+```
+
+```{r}
+dim(inc_2023)[1]
+```
+
+```{r}
+# We are tidy
+head(inc_2023, n = 7) |>
+  gt()
+```
+```{r}
+wealth_2024 <- ApiData12(
+    urlToData = "10320",
+    ContentsCode = "Hushald",
+    Nettoform = c("12", "13", "10", 
+                  "25", "31", "11", "32"
+                  ),
+    Region = knr25conv$knr25,
+    Tid = "2024"
+)
+```
+
+```{r}
+wealth_2024 <- wealth_2024 |> 
+  select(knr = Region, 
+         net_cap = Nettoform, 
+         cap_lev_percent = value) |>  
+  pivot_wider(
+     id_cols = knr, 
+     names_from = "net_cap", 
+     values_from = "cap_lev_percent"
+     ) |>  
+  rename(
+    net_cap_0_250k = `12`,
+    net_cap_250k_500k = `13`,
+    net_cap_500k_1000k = `10`,
+    net_cap_1000k_2000k = `25`,
+    net_cap_2000k_3000k = `31`,
+    net_cap_3000k_4000k = `11`,
+    net_cap_4000k_p = `32`,
+  )
+```
+
+```{r}
+# We are tidy
+head(wealth_2024, n = 6) |> 
+  gt()
+```
+
+```{r}
+dim(wealth_2024)[1]
+```
+
+```{r}
+gov_emp_2025 <- ApiData12(
+    urlToData = "12628",
+    StatligEnhet = "0",
+    # Contracted man-years
+    ContentsCode = "AvtalteArsverk",
+    Region = knr25conv$knr25,
+    Tid = "2025"
+)
+```
+
+```{r}
+gov_emp_2025 <- gov_emp_2025 |> 
+  select(knr = Region, 
+         gov_emp = value)
+```
+
+```{r}
+# We are tidy
+head(gov_emp_2025, n = 10) |>  
+  gt()
+```
+```{r}
+dim(gov_emp_2025)[1]
+```
+
+```{r}
+sales_per_capita_2021  <- ApiData12(
+    urlToData = "04776",
+    Region = unique(
+      knr25conv$knr2023),
+    Tid = "2021"
+  ) |> 
+  select(knr2023 = Region, 
+         spc = value)
+```
+
+```{r}
+sales_per_capita_2021 <- sales_per_capita_2021 |> 
+  left_join(
+    y = knr25conv,
+    join_by(knr2023),
+    # Deal with Ålesund and Haram
+    relationship = "many-to-many"
+  ) |> 
+  select(knr = knr25, spc)
+```
+
+```{r}
+# We are tidy
+head(sales_per_capita_2021) |> 
+  gt()
+```
+
+```{r}
+dim(sales_per_capita_2021)[1]
+```
+
+```{r}
+inc_dec_2024 <- ApiData12(
+    urlToData = "12558",
+    Region = knr25conv$knr25,
+    # Percentage households
+    ContentsCode = "AndelHush",
+    Desiler = c(paste(0, 1:9, sep = ""), "10"),
+    Tid = "2024"
+  ) |> 
+  select(
+    knr = Region ,
+    tax = `inntekt før/etter skatt`,
+    decile = Desiler,
+    percent = value
+  )
+```
+
+```{r}
+inc_dec_2024 <- inc_dec_2024 |> 
+  mutate(
+    tax = case_when(
+      # Income before and after tax
+      tax == "Samlet inntekt" ~ "inc_bt",
+      tax == "Inntekt etter skatt" ~ "inc_at",
+      TRUE ~ as.character(tax)
+    )
+  ) |> 
+  pivot_wider(
+     id_cols = knr, 
+     names_from = c("tax", "decile"), 
+     values_from = "percent"
+     )
+```
+
+```{r}
+# We are tidy
+head(inc_dec_2024) |> 
+  gt()
+```
+```{r}
+dim(inc_dec_2024)[1]
+```
+
+```{r}
+num_emp_2021 <- ApiData12(
+    urlToData = "07196",
+    OrgFormer = c("99","02","03","04","10","24"),
+    AntAnsatte = c("99", "00", "01","02","03","04","05","15","16"),
+    NACE2007 = c("01-99"),
+    Region = unique(
+      knr25conv$knr2023),
+    Tid = "2021"
+  ) |>  
+  select(
+    knr2023 = Region,
+    org_form = organisasjonsform,
+    num_emp_group = `antall ansatte`,
+    firms = value
+  )
+```
+
+```{r}
+num_emp_2021 <- num_emp_2021 |> 
+  left_join(
+    y = knr25conv,
+    join_by(knr2023),
+    # Deal with Ålesund and Haram
+    relationship = "many-to-many"
+  ) |> 
+  select(knr = knr25, -knr2023, everything())
+```
+
+```{r}
+num_emp_2021_all <- num_emp_2021 |> 
+  filter(org_form == "I alt") |> 
+  select(-org_form) |> 
+  mutate(
+    num_emp_group = str_replace_all(num_emp_group, " størrelsesgrupper", ""),
+    num_emp_group = paste("Alle orgf", num_emp_group)
+  ) |>
+  pivot_wider(
+    id_cols = knr,
+    names_from = c("num_emp_group"),
+    values_from = "firms"
+  ) 
+ 
+num_emp_2021_all |> 
+  head(n = 10) |> 
+  gt()
+```
+```{r}
+num_emp_2021_gen <- num_emp_2021 |> 
+  filter(org_form == 'Ansvarlig selskap') |> 
+  select(-org_form) |> 
+  mutate(
+    num_emp_group = str_replace_all(num_emp_group, " størrelsesgrupper", ""),
+    num_emp_group = paste("Ansv. slkp.", num_emp_group)
+  ) |> 
+  pivot_wider(
+    id_cols = knr,
+    names_from = c("num_emp_group"),
+    values_from = "firms"
+  ) 
+
+num_emp_2021_gen |> 
+  head(n = 10) |> 
+  gt()
+```
+```{r}
+num_emp_2021_as <- num_emp_2021 |> 
+  filter(org_form == 'Aksjeselskap (AS)') |> 
+  select(-org_form) |> 
+  mutate(
+    num_emp_group = str_replace_all(num_emp_group, " størrelsesgrupper", ""),
+    num_emp_group = paste("AS", num_emp_group)
+  ) |> 
+  pivot_wider(
+    id_cols = knr,
+    names_from = c("num_emp_group"),
+    values_from = "firms"
+  ) 
+
+num_emp_2021_as |> 
+  head(n = 10) |> 
+  gt()
+```
+
+```{r}
+num_emp_2021_asa <- num_emp_2021 |> 
+  filter(org_form == 'Allment aksjeselskap (ASA)') |> 
+  select(-org_form) |> 
+  mutate(
+    num_emp_group = str_replace_all(num_emp_group, " størrelsesgrupper", ""),
+    num_emp_group = paste("Alle", num_emp_group)
+  ) |>
+  pivot_wider(
+    id_cols = knr,
+    names_from = c("num_emp_group"),
+    values_from = "firms"
+  ) 
+
+num_emp_2021_asa |> 
+  filter(knr %in% c("0301", "1103", "4601", "5001")) |>  
+  gt()
+```
+```{r}
+num_emp_2021_enk <- num_emp_2021 |> 
+  filter(org_form == 'Enkeltpersonforetak') |> 
+  select(-org_form) |> 
+  mutate(
+    num_emp_group = str_replace_all(num_emp_group, " størrelsesgrupper", ""),
+    num_emp_group = paste("Enkeltper.", num_emp_group)
+  ) |> 
+  pivot_wider(
+    id_cols = knr,
+    names_from = c("num_emp_group"),
+    values_from = "firms"
+  ) 
+
+num_emp_2021_enk |> 
+  head(n = 10) |> 
+  gt()
+```
+
+```{r}
+num_emp_2021_nauf <- num_emp_2021 |> 
+  filter(org_form == 'Norsk avdeling av utenlandsk foretak') |> 
+  select(-org_form) |> 
+  mutate(
+    num_emp_group = str_replace_all(num_emp_group, " størrelsesgrupper", ""),
+    num_emp_group = paste("NAUF", num_emp_group)
+  ) |> 
+  pivot_wider(
+    id_cols = knr,
+    names_from = c("num_emp_group"),
+    values_from = "firms"
+  ) 
+
+num_emp_2021_nauf |> 
+  filter(knr %in% c("0301", "1103", "4601", "5001")) |> 
+  gt()
+```
+
+```{r}
+sup_sfd_2025 <- ApiData12(
+    urlToData = "05940",
+    Byggeareal = c("111", "112"),
+    Region = knr25conv$knr25,
+    Tid = "2025")
+
+sup_sfd_2025 <- sup_sfd_2025 |>
+  select(knr = Region, 
+         bygningstype, statistikkvariabel, value) |> 
+  unite(tmp, bygningstype, statistikkvariabel, 
+        sep = "_") |>
+  pivot_wider(
+    id_cols = knr, 
+    names_from = "tmp", 
+    values_from = "value")
+
+sup_sfd_2025 <- sup_sfd_2025 |>
+  rename(
+    sfd_started = `Enebolig_Igangsettingstillatelser boliger`,
+    sfd_ba_started = `Enebolig_Igangsettingstillatelser bruksareal til boliger (m²)`,
+    sfd_ba_completed = `Enebolig_Bruksareal fullførte boliger (m²)`,
+    # w2u = With 2 units
+    sfd_w2u_started = `Enebolig med hybelleilighet, sokkelleilighet o.l._Igangsettingstillatelser boliger`,
+    sfd_w2u_ba_started = `Enebolig med hybelleilighet, sokkelleilighet o.l._Igangsettingstillatelser bruksareal til boliger (m²)`,
+    sfd_w2u_ba_completed = `Enebolig med hybelleilighet, sokkelleilighet o.l._Bruksareal fullførte boliger (m²)`)
+
+```
+
+```{r}
+# We are tidy
+head(sup_sfd_2025, n = 8) |> 
+  gt()
+```
+```{r}
+dim(sup_sfd_2025)[1]
+```
+
+```{r}
+centrality_2024 <- 
+  read_xlsx("Sentralitet 2023-2024 kommuner.xlsx") |> 
+  select(knr = `knr 2024`,
+         cen_ind = `Indeks 2023`,
+         cen_cl = `Klasse 2023`)
+```
+
+```{r}
+head(centrality_2024) |>
+  gt()
+```
+```{r}
+dim(centrality_2024)[1]
+```
+
+```{r}
+knr_kName <- get_klass(
+  classification = "131",
+  date = "2026-01-01"
+  ) |> 
+  select(knr = code,
+         kName = name) |> 
+  filter(knr != "9999")
+```
+
+```{r}
+data_2025 <- knr_kName |> 
+  left_join(pm2_2025, by = join_by(knr)) |> 
+  left_join(pop_2026, by = join_by(knr)) |> 
+  left_join(edu_2025, by = join_by(knr)) |>  
+  left_join(inc_2023, by = join_by(knr)) |> 
+  left_join(gov_emp_2025, by = join_by(knr)) |> 
+  left_join(sales_per_capita_2021, by = join_by(knr)) |> 
+  left_join(inc_dec_2024, by = join_by(knr)) |> 
+  left_join(wealth_2024, by = join_by(knr)) |> 
+  left_join(num_emp_2021_all, by = join_by(knr)) |> 
+  left_join(num_emp_2021_gen, by = join_by(knr)) |> 
+  left_join(num_emp_2021_as, by = join_by(knr)) |> 
+  left_join(num_emp_2021_asa, by = join_by(knr)) |> 
+  left_join(num_emp_2021_enk, by = join_by(knr)) |> 
+  left_join(num_emp_2021_nauf, by = join_by(knr)) |> 
+  left_join(sup_sfd_2025, by = join_by(knr)) |> 
+  left_join(centrality_2024, by = join_by(knr)) |> 
+  mutate(
+    log_pm2 = log(pm2),
+    spc_100k = spc/100000,
+    gov_emp_1k = gov_emp/1000,
+    cen_ind_1k = cen_ind/1000
+  ) |>  
+  # Rearrange 
+  select(knr, kName, pm2, log_pm2, everything())
+```
+
+```{r}
+dim(data_2025)
+```
+
+```{r}
+# Load map
+map_2026 <- st_read("norge26.gpkg") |> 
+  select(knr = kommunenummer,
+         geom)
+```
+
+```{r}
+# Join map and data
+map_data_2025 <- map_2026 |> 
+  left_join(
+    y = data_2025,
+    join_by(knr)
+  ) |> 
+  arrange(knr)
+```
+
+```{r}
+# Write data map
+st_write(
+  obj = map_data_2025, 
+  dsn = "map_data_2025.gpkg",
+  append = FALSE
+  )
+```
+
+
+# Oppgave 1?
+
+```{r}
+map_data_2025 <- 
+  st_read(
+    dsn = "../data/map_data_2025.gpkg"
+  )
+```
+
